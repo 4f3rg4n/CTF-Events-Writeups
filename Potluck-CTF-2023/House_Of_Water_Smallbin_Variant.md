@@ -7,10 +7,10 @@
 The original House of Water technique turns a Use-After-Free vulnerability into control over tcache metadata by crafting a fake chunk and linking it into the unsorted-bin, the linking process abuses the unsorted bin’s doubly linked list, the technique commonly relies on brute-forcing a few ASLR bits and requires "huge chunk" allocations.
 
 This variant applies the same idea while operating through the small bins instead. 
-It carefully aligns and links the fake chunk to satisfy small-bin constraints rather than those of the unsorted-bin, which can also be used to remove the need for heap leaks or brute-forcing and avoids "huge chunk" allocations, while still achieving reliable tcache structure control.
+It carefully aligns and links the fake chunk to satisfy small-bin constraints rather than those of the unsorted-bin, eliminating the need for heap leaks or brute-forcing and avoids "huge chunk" allocations while still achieving reliable tcache structure control.
 
 # Prerequisites
-one of these primitives:
+One of these primitives:
 - Use-After-Free (UAF) 
 - Heap Overflow 
 - Double Free
@@ -34,11 +34,11 @@ struct tcache_perthread_struct {
 The tcache structure contains two parts -- counts and entries.
 The counts array tracks how many entries exist in each tcache bin's linked list stored in the entries array.
 
-The entries linked list are protected with a "protect pointers" mechanism which prevents attackers from partial overwrites or faking pointers into the tcache bin, this protection does not apply to the tcache bins' pointers array.
+The entries linked list is protected with a "protect pointers" mechanism which prevents attackers from partial overwrites or faking pointers into the tcache bin, this protection does not apply to the tcache bins' pointers array.
 
-The tcache itself is stored in the heap as a 0x290-sized chunk (after added 0x10 of heap metadata to it).
+The tcache itself is stored in the heap as a 0x290-sized chunk (after adding 0x10 of heap metadata to it).
 
-Because of the libc allocate the tcache structure it is placed at the start of the heap before any other allocation of the program, so any other allocations will be in higher addresses then the tcache.
+Because libc allocates the tcache structure it is placed at the start of the heap before any other allocation of the program, so any other allocations will be in higher addresses than the tcache.
 
 # Crafting Fake Chunk
 In this part, we will discuss how we create that fake chunk both in the original House of Water technique and in the small-bin variant.
@@ -88,7 +88,7 @@ Another problem is that the pointers themselves are more than a single byte offs
 Therefore, when we overwrite the `fd` & `bk` pointers of the unsorted bin entries, we need to take care of this and brute force the second nibble that belongs to ASLR, which ends with a 1/16 percent success rate.
 
 ## The small-bin variant
-Here, we bypass the 1/16 brute force by creating our fake chunk at the last 0x200 offsets range near the end of the tcache area, along with another heap chunk immediately after the tcache in that same range (offset 0x290), i'll call that chunk "head chunk".
+Here, we bypass the 1/16 brute force by creating our fake chunk at the last 0x200 offsets range near the end of the tcache area, along with another heap chunk immediately after the tcache in that same range (offset 0x290), We'll call that chunk "head chunk".
 
 Then we create another two chunks of the same size as the head chunk and free all the chunks in this order:
 1. free(chunk_one)
@@ -126,8 +126,8 @@ two chunks into the 0x320 & 0x330 tcache bins
 ______
 This chunk we can allocate via malloc in any size we want. 
 Notice the offset between addresses is exactly `0x90` bytes:
-0x61d986503290 (controlled) - 0x61d986503200 (fake) = 0x90
-which is single byte of offset.
+0x5be9d0e19290 (controlled) - 0x5be9d0e19200 (fake) = 0x90
+allowing single-byte LSB overwrite.
 ------------------------------------------------------
 0x5be9d0e19290	0x0000000000000000	0x0000000000000091	 
 0x5be9d0e192a0	0x0000000000000000	0x0000000000000000
@@ -143,7 +143,7 @@ which is single byte of offset.
 As you can see, we can create a fake chunk with `fd` & `bk` but without any `prev_size` / `size` fields, but that doesn't matter when dealing with small bins because small bins don't care about them, just about the `fd` & `bk`.
 
 # Small-bin linking hijack
-After linking our three chunks into the unsorted bin, in such a way that the middle chunk in that list is the chunk at the same range of the fake chunk, and after you used some heap feng shui to place the chunks metadata pointers in the tcache-bin instead of the userdata pointers, you should see something like this:
+After linking our three chunks into the unsorted bin, in such a way that the middle chunk in that list is the chunk at the same range of the fake chunk, and after heap feng shui to place the chunks metadata pointers in the tcache-bin instead of the userdata pointers, you should see something like this:
 
 ```
 tcache chunk at heap start ==
@@ -186,10 +186,10 @@ address: 0x5be9d0e19290
 .....
 ```
 
-Now both chunks fd & bk pointers are the same and point to the same chunks. 
-The next step is to sort the three chunks into the small bin, which you can achieve by allocating a large chunk above the size of the these chunks, it will check each one in the unsorted bin and sort them into the small bin.
+Now both chunks fd & bk pointers are the same and point to the same chunk. 
+The next step is to sort the three chunks into the small bin, which you can achieve by allocating a large chunk larger than these chunks, it will check each one in the unsorted bin and sort them into the small bin.
 
-Then you should have somtething simmilar to this inside the smallbin:
+Then you should have something similar to this inside the smallbin:
 ```
      0x5be9d0e19340                 0x5be9d0e19290                 0x5be9d0e193f0
     ┌──────────────┐              ┌──────────────┐              ┌──────────────┐
