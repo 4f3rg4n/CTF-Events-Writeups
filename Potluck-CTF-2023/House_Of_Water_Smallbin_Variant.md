@@ -230,7 +230,7 @@ UAF Overwrite:
     │*corrupted fd*│              │              │              │*corrupted bk*│
     │              │              │0x5be9d0e193f0|────── fd ───►│              │
     │              │              │              │              │              │
-    │              |◄────── bk ───│0x5be9d0e19340│		|              │
+    │              |◄────── bk ───│0x5be9d0e19340│				|              │
     │              │              │              │              │              │
     │  bk          │              │              │              │          fd  │
     │0x735f44803ba0│              │              │              │0x735f44803ba0│
