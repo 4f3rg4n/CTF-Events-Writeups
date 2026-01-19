@@ -11,7 +11,7 @@ Then forces a libc leak and use the other pointer to craft an FSOP attack to gai
 
 However, one drawback of the House of Water technique is that it already requires brute-forcing `1/16` bits of entropy to successfully link the fake chunk from the tcache to the bin list.
 Additionally, the RCE method described in the blog requires another `1/16` bits of entropy leading to a combined `1/256` chance of success - about `0.4%`...
-It would therefore be ideal to remove this second `1/16` bits of entropy to achieve a clean RCE without any extra brute-forcing beyond the original technique.
+It would therefore be better to remove this second `1/16` bits of entropy to achieve a clean RCE without any extra brute-forcing beyond the original technique.
 
 The idea is simply to move the libc pointers to larger bins from the `0x20` and `0x30`, for example to larger ones like `0x3e0` and `0x3f0`. 
 This way the allocation sizes will overlap the stdout structure so we won’t need to edit these libc pointers and thus avoid brute-forcing ASLR-controlled bits.
